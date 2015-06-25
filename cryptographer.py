@@ -17,8 +17,12 @@ cryptographer.py (-e|-d) -p PASSWORD -k KEYLENGTH (-m MESSAGE | -i INPUTFILE) \
 """
 
 import os
+import sys
 import time
 import argparse
+from operator import add, sub
+
+MAX_UNICODE = 65535
 
 parser = argparse.ArgumentParser()
 action = parser.add_mutually_exclusive_group(required=True)
@@ -99,9 +103,9 @@ def phase1_crypto(password, nonce, rnum, message, function, verbose):
         offset = int(ord(password[index % (password.index('') - 1)])) * \
                  ord(nonce)
         if function == "encrypt":
-            encrypted_char = chr(int(ord(letter) + offset) % 55000)
+            encrypted_char = chr(int(ord(letter) + offset) % MAX_UNICODE)
         elif function == "decrypt":
-            encrypted_char = chr(int(ord(letter) - offset) % 55000)
+            encrypted_char = chr(int(ord(letter) - offset) % MAX_UNICODE)
         encrypted_message = encrypted_message + encrypted_char
     message = encrypted_message
     if verbose == 2:
@@ -109,28 +113,27 @@ def phase1_crypto(password, nonce, rnum, message, function, verbose):
     return message
 
 
-def phase2_crypto(password, nonce, rnum, message, char, function, verbose):
+def phase2(password, message, rnonce, rnum,
+           decrypt=False, encrypt_idx=5):
     """ Phase 2 encrypts every fifth character in the message, starting with
     the one in the position of the round number modulus 5, by shifting it by
     a number derived from the round number, nonce, and the ordinal position of
     the current round's character from the hashed password devided by the
     length of the password."""
-    rnonce = rnum * ord(nonce)
-    encrypted_message = ""
-    for index, letter in enumerate(message):
-        if index % 5 == rnum % 5:
-            pass_place = int(ord(char) / len(password))
-            if function == "encrypt":
-                encrypted_char = chr((ord(letter) + (pass_place * rnonce)) % 55000)
-            elif function == "decrypt":
-                encrypted_char = chr((ord(letter) - (pass_place * rnonce)) % 55000)
-            encrypted_message = encrypted_message + encrypted_char
-        else:
-            encrypted_message = encrypted_message + letter
-    message = encrypted_message
-    if verbose == 2:
-        print("Round " + str(rnum) + "-- Phase 2: " + message)
-    return message
+
+    start_char = rnum % encrypt_idx
+    pass_char = ord(password[rnum])
+    pass_place = int(pass_char / len(password))
+    shift = pass_place * rnonce
+
+    def translate(char):
+        operation = sub if decrypt else add
+        result = operation(ord(char), shift)
+        return chr(result % MAX_UNICODE)
+
+    return ''.join(char if i % encrypt_idx
+                   else translate(char)
+                   for i, char in enumerate(message, start_char))
 
 
 def hash_pass(password, keylength, verbose):
@@ -148,30 +151,30 @@ def hash_pass(password, keylength, verbose):
         n0 = int(i[0]) + 2
         n1 = int(i[1]) + 2
         n2 = int(i[2]) + 2
-        p = p + chr(((n0 ** n1) ** n2) % 55000 + 48)
+        p = p + chr(((n0 ** n1) ** n2) % MAX_UNICODE + 48)
     password = p[:int(keylength)]
     if verbose == 2:
         print("Hashed password: " + password)
 
 
 def main(arguments):
-    """Performs all of the nessacerry setup and clean up to encrypt or
+    """Performs all of the necessary setup and clean up to encrypt or
     decrypt a message based on the -e or -d arugments.
     Also handles writing to the output file or standard out."""
     function, message, output_file, verbose, password, keylength = \
         variables(arguments)
     if function == "encrypt":
-        nonce = chr(int(time.time() * 10000000) % 55000)
+        nonce = chr(int(time.time() * 10000000) % MAX_UNICODE)
     elif function == "decrypt":
         nonce = message[0]
         message = message[1:]
 
     hash_pass(password, keylength, verbose)
     for rnum, char in enumerate(password):
+        rnonce = rnum * ord(nonce)
         message = phase1_crypto(password, nonce, rnum, message, function,
                                 verbose)
-        message = phase2_crypto(password, nonce, rnum, message, char,
-                                function, verbose)
+        message = phase2(password, message, rnonce, rnum, arguments.decrypt)
         if verbose > 0:
             print((rnum / len(password)) * 100, "% Complete.")
 
